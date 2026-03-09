@@ -8,8 +8,7 @@
 #pragma once
 
 /* ************************************************************************* */
-// OpenCV
-#include <opencv2/core/core.hpp>
+#include "akaze_types.h"
 
 // OpenMP
 #ifdef _OPENMP
@@ -23,6 +22,7 @@
 #include <cmath>
 #include <bitset>
 #include <iomanip>
+#include <iostream>
 
 /* ************************************************************************* */
 /// Lookup table for 2d gaussian (sigma = 2.5) where (0,0) is top left and (6,6) is bottom right
@@ -183,17 +183,16 @@ struct TEvolution {
     sigma_size = 0;
   }
 
-  cv::Mat Lx, Ly;                   ///< First order spatial derivatives
-  cv::Mat Lxx, Lxy, Lyy;            ///< Second order spatial derivatives
-  cv::Mat Lflow;                    ///< Diffusivity image
-  cv::Mat Lt;                       ///< Evolution image
-  cv::Mat Lsmooth;                  ///< Smoothed image
-  cv::Mat Lstep;                    ///< Evolution step update
-  cv::Mat Ldet;                     ///< Detector response
+  AkazeMat Lx, Ly;                   ///< First order spatial derivatives
+  AkazeMat Lxx, Lxy, Lyy;            ///< Second order spatial derivatives
+  AkazeMat Lflow;                    ///< Diffusivity image
+  AkazeMat Lt;                       ///< Evolution image
+  AkazeMat Lsmooth;                  ///< Smoothed image
+  AkazeMat Lstep;                    ///< Evolution step update
+  AkazeMat Ldet;                     ///< Detector response
   float etime;                      ///< Evolution time
   float esigma;                     ///< Evolution sigma. For linear diffusion t = sigma^2 / 2
   size_t octave;                    ///< Image octave
   size_t sublevel;                  ///< Image sublevel in each octave
   size_t sigma_size;                ///< Integer sigma. For computing the feature detector responses
 };
-

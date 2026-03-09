@@ -1,0 +1,6 @@
+# Runtime
+numpy
+
+# Build (required for CMake, avoids FetchContent from GitHub)
+pybind11>=2.10
+scikit-build>=0.16

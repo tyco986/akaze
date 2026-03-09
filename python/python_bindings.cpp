@@ -1,45 +1,55 @@
-#define PY_ARRAY_UNIQUE_SYMBOL pbcvt_ARRAY_API
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/functional.h>
 
-#include <boost/python.hpp>
-#include <pyboostcvconverter/pyboostcvconverter.hpp>
+#include "akazemat2numpy.hpp"
+#include "AKAZE.h"
 
-#include <AKAZE.h>
+namespace py = pybind11;
+using namespace libAKAZECU;
 
-namespace libakaze_pybindings {
+PYBIND11_MODULE(libakaze_pybindings, m) {
+    m.doc() = "AKAZE CUDA Python bindings (pybind11, no OpenCV)";
 
-    using namespace libAKAZECU;
-    using namespace boost::python;
-    
-    
-    static void init_ar(){
-	Py_Initialize();
-	import_array();
-    }
+    py::class_<AKAZEOptions>(m, "AKAZEOptions")
+        .def(py::init<>())
+        .def("setWidth", &AKAZEOptions::setWidth)
+        .def("setHeight", &AKAZEOptions::setHeight)
+        .def_readwrite("omax", &AKAZEOptions::omax)
+        .def_readwrite("nsublevels", &AKAZEOptions::nsublevels)
+        .def_readwrite("dthreshold", &AKAZEOptions::dthreshold);
 
-    
-    BOOST_PYTHON_MODULE(libakaze_pybindings)
-    {
-	init_ar();
-	
-	to_python_converter<cv::Mat,pbcvt::matToNDArrayBoostConverter>();
-	pbcvt::matFromNDArrayBoostConverter();
-	
-	class_<AKAZEOptions>("AKAZEOptions")
-	    .def("setWidth",&AKAZEOptions::setWidth)
-	    .def("setHeight",&AKAZEOptions::setHeight)
-	    ;
-	
-	class_<AKAZE>("AKAZE", init<AKAZEOptions>())
-	    .def("Create_Nonlinear_Scale_Space", &AKAZE::Create_Nonlinear_Scale_Space)
-	    .def("Feature_Detection",&AKAZE::Feature_Detection_)
-	    .def("Compute_Descriptors",&AKAZE::Compute_Descriptors_)
-	    ;
+    py::class_<AKAZE>(m, "AKAZE")
+        .def(py::init<AKAZEOptions>())
+        .def("Create_Nonlinear_Scale_Space", [](AKAZE& self, py::array_t<float> img) {
+            AkazeMat mat = numpy_to_mat(img);
+            return self.Create_Nonlinear_Scale_Space(mat);
+        })
+        .def("Feature_Detection", [](AKAZE& self) {
+            return mat_to_numpy(self.Feature_Detection_());
+        })
+        .def("Compute_Descriptors", [](AKAZE& self) {
+            auto p = self.Compute_Descriptors_Seq();
+            return py::make_tuple(mat_to_numpy(p.first), mat_to_numpy(p.second));
+        });
 
-	class_<Matcher>("Matcher")
-	    .def("BFMatch",&Matcher::bfmatch_)
-	    ;
-	
-	
-    }
-
+    py::class_<Matcher>(m, "Matcher")
+        .def(py::init<>())
+        .def("BFMatch", [](Matcher& self, py::array_t<unsigned char> desc_query,
+                          py::array_t<unsigned char> desc_train) {
+            py::buffer_info q = desc_query.request();
+            py::buffer_info t = desc_train.request();
+            if (q.ndim != 2 || t.ndim != 2)
+                throw std::runtime_error("Descriptors must be 2D arrays");
+            AkazeMat mq(static_cast<int>(q.shape[0]), static_cast<int>(q.shape[1]),
+                        AKAZE_8UC1);
+            std::memcpy(mq.data, q.ptr,
+                        static_cast<size_t>(q.shape[0]) * q.shape[1]);
+            AkazeMat mt(static_cast<int>(t.shape[0]), static_cast<int>(t.shape[1]),
+                        AKAZE_8UC1);
+            std::memcpy(mt.data, t.ptr,
+                        static_cast<size_t>(t.shape[0]) * t.shape[1]);
+            AkazeMat result = self.bfmatch_(mq, mt);
+            return mat_to_numpy(result);
+        });
 }

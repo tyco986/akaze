@@ -1,4 +1,5 @@
-#include <opencv2/features2d/features2d.hpp>
+#define _USE_MATH_DEFINES
+#include <cmath>
 #include "cuda_akaze.h"
 #include "cudautils.h"
 
@@ -475,8 +476,8 @@ double Copy(CudaImage &inimg, CudaImage &outimg) {
 }
 
 float *AllocBuffers(int width, int height, int num, int omax, int &maxpts,
-                    std::vector<CudaImage> &buffers, cv::KeyPoint *&pts,
-                    cv::KeyPoint *&ptsbuffer, int *&ptindices, unsigned char *&desc, float *&descbuffer, CudaImage *&ims) {
+                    std::vector<CudaImage> &buffers, AkazeKeyPoint *&pts,
+                    AkazeKeyPoint *&ptsbuffer, int *&ptindices, unsigned char *&desc, float *&descbuffer, CudaImage *&ims) {
 
   maxpts = 4 * ((maxpts+3)/4);
 
@@ -499,9 +500,9 @@ float *AllocBuffers(int width, int height, int num, int omax, int &maxpts,
     p = iAlignUp(w, 128);
   }
   int ptsstart = size;
-  size += sizeof(cv::KeyPoint) * maxpts / sizeof(float);
+  size += sizeof(AkazeKeyPoint) * maxpts / sizeof(float);
   int ptsbufferstart = size;
-  size += sizeof(cv::KeyPoint) * maxpts / sizeof(float);
+  size += sizeof(AkazeKeyPoint) * maxpts / sizeof(float);
   int descstart = size;
   size += sizeof(unsigned char)*maxpts*61/sizeof(float);
   int descbufferstart = size;
@@ -513,16 +514,14 @@ float *AllocBuffers(int width, int height, int num, int omax, int &maxpts,
   float *memory = NULL;
   size_t pitch;
 
-  std::cout << "allocating " << size/1024./1024. << " Mbytes of gpu memory\n";
-
   safeCall(cudaMallocPitch((void **)&memory, &pitch, (size_t)4096,
                            (size + 4095) / 4096 * sizeof(float)));
   for (int i = 0; i < omax * num; i++) {
     CudaImage &buf = buffers[i];
     buf.d_data = memory + (long)buf.d_data;
   }
-  pts = (cv::KeyPoint *)(memory + ptsstart);
-  ptsbuffer = (cv::KeyPoint *)(memory + ptsbufferstart);
+  pts = (AkazeKeyPoint *)(memory + ptsstart);
+  ptsbuffer = (AkazeKeyPoint *)(memory + ptsbufferstart);
   desc = (unsigned char *)(memory + descstart);
   descbuffer = (float*)(memory + descbufferstart);
   ptindices = (int*)(memory + indicesstart);
@@ -725,7 +724,7 @@ double HessianDeterminant(CudaImage &img, CudaImage &lx, CudaImage &ly,
 __global__ void FindExtrema(float *imd, float *imp, float *imn, int maxx,
                             int pitch, int maxy, float border, float dthreshold,
                             int scale, int octave, float size,
-                            cv::KeyPoint *pts, int maxpts) {
+                            AkazeKeyPoint *pts, int maxpts) {
   int x = blockIdx.x * 32 + threadIdx.x;
   int y = blockIdx.y * 16 + threadIdx.y;
 
@@ -755,7 +754,7 @@ __global__ void FindExtrema(float *imd, float *imp, float *imn, int maxx,
     }
     unsigned int idx = atomicInc(d_PointCounter, 0x7fffffff);
     if (idx < maxpts) {
-      cv::KeyPoint &point = pts[idx];
+      AkazeKeyPoint &point = pts[idx];
       point.response = v;
       point.size = (weak ? -1 : 1) * 2.0 * size;
       float octsub = (dst0 < 0 ? -1 : 1) * (octave + fabs(dst0));
@@ -777,7 +776,7 @@ __global__ void CopyIdxArray(int scale) {
 
 double FindExtrema(CudaImage &img, CudaImage &imgp, CudaImage &imgn,
                    float border, float dthreshold, int scale, int octave,
-                   float size, cv::KeyPoint *pts, int maxpts) {
+                   float size, AkazeKeyPoint *pts, int maxpts) {
   // TimerGPU timer0(0);
   dim3 blocks(iDivUp(img.width, 32), iDivUp(img.height, 16));
   dim3 threads(32, 16);
@@ -815,8 +814,8 @@ __forceinline__ __device__ void atomicSort(int *pts, int shmidx, int offset,
   }
 }
 
-__forceinline__ __device__ bool atomicCompare(const cv::KeyPoint &i,
-                                              const cv::KeyPoint &j) {
+__forceinline__ __device__ bool atomicCompare(const AkazeKeyPoint &i,
+                                              const AkazeKeyPoint &j) {
   float t = i.pt.x * j.pt.x;
   if (t == 0) {
     if (j.pt.x != 0) {
@@ -889,7 +888,7 @@ __global__ void bitonicSort(const T *pts, T *newpts) {
 
   int nkpts = last - first;
 
-  const cv::KeyPoint *tmpg = &pts[first];
+  const AkazeKeyPoint *tmpg = &pts[first];
 
   for (int i = threadIdx.x; i < 8192;
        i += BitonicSortThreads) {
@@ -921,7 +920,7 @@ __global__ void bitonicSort(const T *pts, T *newpts) {
   }
   
 
-  cv::KeyPoint *tmpnewg = &newpts[first];
+  AkazeKeyPoint *tmpnewg = &newpts[first];
   for (int i = 0; i < 8192; i += BitonicSortThreads) {
     if (i + threadIdx.x < nkpts) {
       tmpnewg[i + threadIdx.x].angle = tmpg[shm[i + threadIdx.x].idx].angle;
@@ -947,7 +946,7 @@ __global__ void bitonicSort_global(const T *pts, T *newpts, sortstruct_t<int>* _
 
   int nkpts = last - first;
 
-  const cv::KeyPoint *tmpg = &pts[first];
+  const AkazeKeyPoint *tmpg = &pts[first];
 
   int nkpts_ceil = 1;
   while (nkpts_ceil < nkpts) nkpts_ceil *= 2;
@@ -984,7 +983,7 @@ __global__ void bitonicSort_global(const T *pts, T *newpts, sortstruct_t<int>* _
   }
   
 
-  cv::KeyPoint *tmpnewg = &newpts[first];
+  AkazeKeyPoint *tmpnewg = &newpts[first];
   for (int i = 0; i < nkpts_ceil; i += BitonicSortThreads) {
     if (i + threadIdx.x < nkpts) {
       tmpnewg[i + threadIdx.x].angle = tmpg[shm[i + threadIdx.x].idx].angle;
@@ -1001,7 +1000,7 @@ __global__ void bitonicSort_global(const T *pts, T *newpts, sortstruct_t<int>* _
 
 
 #define FindNeighborsThreads 32
-__global__ void FindNeighbors(cv::KeyPoint *pts, int *kptindices, int width) {
+__global__ void FindNeighbors(AkazeKeyPoint *pts, int *kptindices, int width) {
   __shared__ int gidx[1];
 
   // which scale?
@@ -1015,14 +1014,14 @@ __global__ void FindNeighbors(cv::KeyPoint *pts, int *kptindices, int width) {
   __syncthreads();
 
   // One keypoint per block.
-  cv::KeyPoint &kpt = pts[blockIdx.x];
+  AkazeKeyPoint &kpt = pts[blockIdx.x];
 
   // Key point to compare. Only compare with smaller than current
   // Iterate backwards instead and break as soon as possible!
   //for (int i = cmpIdx + threadIdx.x; i < blockIdx.x; i += FindNeighborsThreads) {
   for (int i=blockIdx.x-threadIdx.x-1; i >= cmpIdx; i -= FindNeighborsThreads) {
       
-      cv::KeyPoint &kpt_cmp = pts[i];
+      AkazeKeyPoint &kpt_cmp = pts[i];
       
       if (kpt.pt.y-kpt_cmp.pt.y > size*.5f) break;
       
@@ -1041,7 +1040,7 @@ __global__ void FindNeighbors(cv::KeyPoint *pts, int *kptindices, int width) {
       int startidx = d_ExtremaIdx[scale-1];
       cmpIdx = scale < 2 ? 0 : d_ExtremaIdx[scale - 2];
       for (int i=startidx-threadIdx.x-1; i >= cmpIdx; i -= FindNeighborsThreads) {	  
-	  cv::KeyPoint &kpt_cmp = pts[i];
+	  AkazeKeyPoint &kpt_cmp = pts[i];
 	  
 	  if (kpt_cmp.pt.y-kpt.pt.y > size*.5f) continue;
 	  
@@ -1069,7 +1068,7 @@ __global__ void FindNeighbors(cv::KeyPoint *pts, int *kptindices, int width) {
 
 // TODO Intermediate storage of memberarray and minneighbor
 #define FilterExtremaThreads 1024
-__global__ void FilterExtrema_kernel(cv::KeyPoint *kpts, cv::KeyPoint *newkpts,
+__global__ void FilterExtrema_kernel(AkazeKeyPoint *kpts, AkazeKeyPoint *newkpts,
 				     int *kptindices, int width,
 				     int *memberarray,
 				     int *minneighbor,
@@ -1186,8 +1185,8 @@ __global__ void FilterExtrema_kernel(cv::KeyPoint *kpts, cv::KeyPoint *newkpts,
       if (minneighbor[i] != nump+1) {
         if (memberarray[minneighbor[i]] == -1) {
           if (!shouldAdd[minneighbor[i]]) {
-            const cv::KeyPoint &p0 = kpts[minneighbor[i]];
-            const cv::KeyPoint &p1 = kpts[i];
+            const AkazeKeyPoint &p0 = kpts[minneighbor[i]];
+            const AkazeKeyPoint &p1 = kpts[i];
             if (p0.response > p1.response) {
               memberarray[minneighbor[i]] = i;
               memberarray[i] = -2;
@@ -1222,7 +1221,7 @@ __global__ void FilterExtrema_kernel(cv::KeyPoint *kpts, cv::KeyPoint *newkpts,
 }
 
 
-__global__ void sortFiltered_kernel(cv::KeyPoint *kpts, cv::KeyPoint *newkpts,
+__global__ void sortFiltered_kernel(AkazeKeyPoint *kpts, AkazeKeyPoint *newkpts,
 				    int *memberarray) {
 
 
@@ -1268,12 +1267,12 @@ __global__ void sortFiltered_kernel(cv::KeyPoint *kpts, cv::KeyPoint *newkpts,
     for (int k = threadIdx.x; k < 2048; k += 1024) {
       if (minneighbor[k] < nump) {
           // Restore subpixel component
-	  cv::KeyPoint &okpt = kpts[minneighbor[k]];
+	  AkazeKeyPoint &okpt = kpts[minneighbor[k]];
           float octsub = fabs(*(float*)(&kpts[minneighbor[k]].octave));
           int octave = (int)octsub;
           float subp = (*(float*)(&kpts[minneighbor[k]].octave) < 0 ? -1 : 1) * (octsub - octave);
           float ratio = 1 << octave;
-	  cv::KeyPoint &tkpt = newkpts[k + curridx[0]];
+	  AkazeKeyPoint &tkpt = newkpts[k + curridx[0]];
 	  tkpt.pt.y = ratio * ((int)(0.5f+okpt.pt.y / ratio) + okpt.angle);
 	  tkpt.pt.x = ratio * ((int)(0.5f+okpt.pt.x / ratio) + subp);
 	  // newkpts[k + curridx[0] + threadIdx.x].angle = 0; // This will be set elsewhere
@@ -1313,7 +1312,7 @@ __global__ void sortFiltered_kernel(cv::KeyPoint *kpts, cv::KeyPoint *newkpts,
   }
 }
 
-void FilterExtrema(cv::KeyPoint *pts, cv::KeyPoint *newpts, int* kptindices, int& nump) {
+void FilterExtrema(AkazeKeyPoint *pts, AkazeKeyPoint *newpts, int* kptindices, int& nump) {
 
   //int nump;
   cudaMemcpyFromSymbol(&nump, d_PointCounter, sizeof(int));
@@ -1349,13 +1348,13 @@ CHK
   
 
   
-/*  cv::KeyPoint* newpts_h = new cv::KeyPoint[nump];
-  cudaMemcpy(newpts_h,newpts,nump*sizeof(cv::KeyPoint),cudaMemcpyDeviceToHost);
+/*  AkazeKeyPoint* newpts_h = new AkazeKeyPoint[nump];
+  cudaMemcpy(newpts_h,newpts,nump*sizeof(AkazeKeyPoint),cudaMemcpyDeviceToHost);
 
   int scale = 0;
   for (int i=1; i<nump; ++i) {
-      cv::KeyPoint &k0 = newpts_h[i-1];
-      cv::KeyPoint &k1 = newpts_h[i];
+      AkazeKeyPoint &k0 = newpts_h[i-1];
+      AkazeKeyPoint &k1 = newpts_h[i];
 
       std::cout << i << ": " << newpts_h[i].class_id << ": " << newpts_h[i].pt.y << " " << newpts_h[i].pt.x << ", " << newpts_h[i].size;
 
@@ -1400,22 +1399,22 @@ CHK
 }
 
 
-int GetPoints(std::vector<cv::KeyPoint> &h_pts, cv::KeyPoint *d_pts, int numPts) {
+int GetPoints(std::vector<AkazeKeyPoint> &h_pts, AkazeKeyPoint *d_pts, int numPts) {
   h_pts.resize(numPts);
   safeCall(cudaMemcpyAsync((float *)&h_pts[0], d_pts,
-                           sizeof(cv::KeyPoint) * numPts,
+                           sizeof(AkazeKeyPoint) * numPts,
                            cudaMemcpyDeviceToHost, copyStream));
   return numPts;
 }
 
 
-void GetDescriptors(cv::Mat &h_desc, cv::Mat &d_desc, int numPts) {
-    h_desc = cv::Mat(numPts, 61, CV_8U);
+void GetDescriptors(AkazeMat &h_desc, AkazeMat &d_desc, int numPts) {
+    h_desc = AkazeMat(numPts, 61, AKAZE_8UC1);
     cudaMemcpyAsync(h_desc.data, d_desc.data, numPts*61, cudaMemcpyDeviceToHost, copyStream);
 }
 
 
-__global__ void ExtractDescriptors(cv::KeyPoint *d_pts, CudaImage *d_imgs,
+__global__ void ExtractDescriptors(AkazeKeyPoint *d_pts, CudaImage *d_imgs,
                                    float *_vals, int size2, int size3,
                                    int size4) {
   __shared__ float acc_vals[3 * 30 * EXTRACT_S];
@@ -1507,11 +1506,11 @@ __global__ void ExtractDescriptors(cv::KeyPoint *d_pts, CudaImage *d_imgs,
       if (tx_d < 32) {
         acc_reg = acc_vals[3 * 30 * tx_d + offset + d] +
                   acc_vals[3 * 30 * (tx_d + 32) + offset + d];
-        acc_reg += __shfl_down(acc_reg, 1);
-        acc_reg += __shfl_down(acc_reg, 2);
-        acc_reg += __shfl_down(acc_reg, 4);
-        acc_reg += __shfl_down(acc_reg, 8);
-        acc_reg += __shfl_down(acc_reg, 16);
+        acc_reg += __shfl_down_sync(0xffffffff, acc_reg, 1);
+        acc_reg += __shfl_down_sync(0xffffffff, acc_reg, 2);
+        acc_reg += __shfl_down_sync(0xffffffff, acc_reg, 4);
+        acc_reg += __shfl_down_sync(0xffffffff, acc_reg, 8);
+        acc_reg += __shfl_down_sync(0xffffffff, acc_reg, 16);
       }
       if (tx_d == 0) {
         acc_vals[offset + d] = acc_reg;
@@ -1530,7 +1529,7 @@ __global__ void ExtractDescriptors(cv::KeyPoint *d_pts, CudaImage *d_imgs,
   }
 }
 
-__global__ void ExtractDescriptors_serial(cv::KeyPoint *d_pts,
+__global__ void ExtractDescriptors_serial(AkazeKeyPoint *d_pts,
                                           CudaImage *d_imgs, float *_vals,
                                           int size2, int size3, int size4) {
   __shared__ float acc_vals[30 * EXTRACT_S];
@@ -1805,7 +1804,7 @@ __global__ void BuildDescriptor(float *_valsim, unsigned char *_desc) {
 }
 
 
-double ExtractDescriptors(cv::KeyPoint *d_pts, std::vector<CudaImage> &h_imgs, CudaImage *d_imgs,
+double ExtractDescriptors(AkazeKeyPoint *d_pts, std::vector<CudaImage> &h_imgs, CudaImage *d_imgs,
                           unsigned char *desc_d, float* vals_d, int patsize, int numPts) {
   int size2 = patsize;
   int size3 = ceil(2.0f * patsize / 3.0f);
@@ -1839,7 +1838,7 @@ double ExtractDescriptors(cv::KeyPoint *d_pts, std::vector<CudaImage> &h_imgs, C
 
 #define NTHREADS_MATCH 32
 __global__ void MatchDescriptors(unsigned char *d1, unsigned char *d2,
-                                 int pitch, int nkpts_2, cv::DMatch *matches) {
+                                 int pitch, int nkpts_2, AkazeMatch *matches) {
   int p = blockIdx.x;
 
   int x = threadIdx.x;
@@ -1965,20 +1964,20 @@ __global__ void MatchDescriptors(unsigned char *d1, unsigned char *d2,
 }
 
 
-void MatchDescriptors(cv::Mat &desc_query, cv::Mat &desc_train,
-		      std::vector<std::vector<cv::DMatch> > &dmatches,
+void MatchDescriptors(AkazeMat &desc_query, AkazeMat &desc_train,
+		      std::vector<std::vector<AkazeMatch> > &dmatches,
 		      size_t pitch, 
-		      unsigned char* descq_d, unsigned char* desct_d, cv::DMatch* dmatches_d, cv::DMatch* dmatches_h) {
+		      unsigned char* descq_d, unsigned char* desct_d, AkazeMatch* dmatches_d, AkazeMatch* dmatches_h) {
 
     dim3 block(desc_query.rows);
     
     MatchDescriptors << <block, NTHREADS_MATCH>>>(descq_d, desct_d, pitch, desc_train.rows, dmatches_d);
 
-    cudaMemcpy(dmatches_h, dmatches_d, desc_query.rows * 2 * sizeof(cv::DMatch),
+    cudaMemcpy(dmatches_h, dmatches_d, desc_query.rows * 2 * sizeof(AkazeMatch),
 	       cudaMemcpyDeviceToHost);
 
     for (int i = 0; i < desc_query.rows; ++i) {
-	std::vector<cv::DMatch> tdmatch;
+	std::vector<AkazeMatch> tdmatch;
 	//std::cout << dmatches_h[2*i].trainIdx << " - " << dmatches_h[2*i].queryIdx << std::endl;
 	tdmatch.push_back(dmatches_h[2 * i]);
 	tdmatch.push_back(dmatches_h[2 * i + 1]);
@@ -1988,8 +1987,8 @@ void MatchDescriptors(cv::Mat &desc_query, cv::Mat &desc_train,
 }
 
 
-void MatchDescriptors(cv::Mat &desc_query, cv::Mat &desc_train,
-                      std::vector<std::vector<cv::DMatch> > &dmatches) {
+void MatchDescriptors(AkazeMat &desc_query, AkazeMat &desc_train,
+                      std::vector<std::vector<AkazeMatch> > &dmatches) {
   size_t pitch1, pitch2;
   unsigned char *descq_d;
   cudaMallocPitch(&descq_d, &pitch1, 64, desc_query.rows);
@@ -2004,17 +2003,17 @@ void MatchDescriptors(cv::Mat &desc_query, cv::Mat &desc_train,
 
   dim3 block(desc_query.rows);
 
-  cv::DMatch *dmatches_d;
-  cudaMalloc(&dmatches_d, desc_query.rows * 2 * sizeof(cv::DMatch));
+  AkazeMatch *dmatches_d;
+  cudaMalloc(&dmatches_d, desc_query.rows * 2 * sizeof(AkazeMatch));
 
   MatchDescriptors << <block, NTHREADS_MATCH>>>(descq_d, desct_d, pitch1, desc_train.rows, dmatches_d);
 
-  cv::DMatch *dmatches_h = new cv::DMatch[2 * desc_query.rows];
-  cudaMemcpy(dmatches_h, dmatches_d, desc_query.rows * 2 * sizeof(cv::DMatch),
+  AkazeMatch *dmatches_h = new AkazeMatch[2 * desc_query.rows];
+  cudaMemcpy(dmatches_h, dmatches_d, desc_query.rows * 2 * sizeof(AkazeMatch),
              cudaMemcpyDeviceToHost);
 
   for (int i = 0; i < desc_query.rows; ++i) {
-    std::vector<cv::DMatch> tdmatch;
+    std::vector<AkazeMatch> tdmatch;
     //std::cout << dmatches_h[2*i].trainIdx << " - " << dmatches_h[2*i].queryIdx << std::endl;
     tdmatch.push_back(dmatches_h[2 * i]);
     tdmatch.push_back(dmatches_h[2 * i + 1]);
@@ -2109,7 +2108,7 @@ void InitCompareIndices() {
 }
 
 
-__global__ void FindOrientation(cv::KeyPoint *d_pts, CudaImage *d_imgs) {
+__global__ void FindOrientation(AkazeKeyPoint *d_pts, CudaImage *d_imgs) {
   __shared__ float resx[42], resy[42];
   __shared__ float re8x[42], re8y[42];
   int p = blockIdx.x;
@@ -2133,7 +2132,7 @@ __global__ void FindOrientation(cv::KeyPoint *d_pts, CudaImage *d_imgs) {
     float dx = gweight * dxd[pos];
     float dy = gweight * dyd[pos];
     float angle = atan2(dy, dx);
-    int a = max(min((int)(angle * (21 / CV_PI)) + 21, 41), 0);
+    int a = max(min((int)(angle * (21 / M_PI)) + 21, 41), 0);
     atomicAdd(resx + a, dx);
     atomicAdd(resy + a, dy);
   }
@@ -2158,13 +2157,13 @@ __global__ void FindOrientation(cv::KeyPoint *d_pts, CudaImage *d_imgs) {
       }
     }
     float angle = atan2(re8y[maxk], re8x[maxk]);
-    d_pts[p].angle = (angle < 0.0f ? angle + 2.0f * CV_PI : angle);
+    d_pts[p].angle = (angle < 0.0f ? angle + 2.0f * M_PI : angle);
     // printf("XXX %.2f %.2f %.2f\n", d_pts[p].pt.x, d_pts[p].pt.y,
-    // d_pts[p].angle/CV_PI*180.0f);
+    // d_pts[p].angle/M_PI*180.0f);
   }
 }
 
-double FindOrientation(cv::KeyPoint *d_pts, std::vector<CudaImage> &h_imgs, CudaImage *d_imgs, int numPts) {
+double FindOrientation(AkazeKeyPoint *d_pts, std::vector<CudaImage> &h_imgs, CudaImage *d_imgs, int numPts) {
 
   safeCall(cudaMemcpyAsync(d_imgs, (float *)&h_imgs[0],
                            sizeof(CudaImage) * h_imgs.size(),
