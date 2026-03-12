@@ -218,7 +218,7 @@ class AkazeMat_ : public AkazeMat {
         if (sizeof(T) == 4) {
             /* distinguish int vs float by checking if T is integral */
             T test = T(-1);
-            return (test < T(0)) ? AKAZE_32SC1 : AKAZE_32SC1;
+            return (test < T(0)) ? AKAZE_32SC1 : AKAZE_32FC1;
         }
         return AKAZE_32FC1;
     }

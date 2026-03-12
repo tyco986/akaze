@@ -1,0 +1,2 @@
+/usr/bin/ar qc lib/libAKAZE.a CMakeFiles/AKAZE.dir/src/AKAZE.cpp.o CMakeFiles/AKAZE.dir/src/fed.cpp.o
+/usr/bin/ranlib lib/libAKAZE.a

@@ -1,0 +1,9 @@
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/AKAZE.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/AKAZE_CUDA.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/libakaze_pybindings.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/edit_cache.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/rebuild_cache.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/list_install_components.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/install.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/install/local.dir
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-build/CMakeFiles/install/strip.dir

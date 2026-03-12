@@ -388,43 +388,47 @@ __global__ void HalfSample(float *iimd, float *oimd, int iwidth, int iheight,
   int ty = threadIdx.y;
   int x = blockIdx.x * 16 + tx;
   int y = blockIdx.y * 16 + ty;
-  if (x >= owidth || y >= oheight) return;
-  float *ptri = iimd + (2 * y) * ipitch + (2 * x);
-  if (2 * owidth == iwidth) {
-    buffer[ty * 32 + tx] = owidth * (ptri[0] + ptri[1]);
-    ptri += ipitch;
-    buffer[ty * 32 + tx + 16] = owidth * (ptri[0] + ptri[1]);
-    if (ty == 15) {
+  bool active = (x < owidth && y < oheight);
+  if (active) {
+    float *ptri = iimd + (2 * y) * ipitch + (2 * x);
+    if (2 * owidth == iwidth) {
+      buffer[ty * 32 + tx] = owidth * (ptri[0] + ptri[1]);
       ptri += ipitch;
-      buffer[tx + 32 * 16] = owidth * (ptri[0] + ptri[1]);
-    } else if (y * 2 + 3 == iheight) {
+      buffer[ty * 32 + tx + 16] = owidth * (ptri[0] + ptri[1]);
+      if (ty == 15) {
+        ptri += ipitch;
+        buffer[tx + 32 * 16] = owidth * (ptri[0] + ptri[1]);
+      } else if (y * 2 + 3 == iheight) {
+        ptri += ipitch;
+        buffer[tx + 32 * (ty + 1)] = owidth * (ptri[0] + ptri[1]);
+      }
+    } else {
+      float f0 = owidth - x;
+      float f2 = 1 + x;
+      buffer[ty * 32 + tx] = f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
       ptri += ipitch;
-      buffer[tx + 32 * (ty + 1)] = owidth * (ptri[0] + ptri[1]);
-    }
-  } else {
-    float f0 = owidth - x;
-    float f2 = 1 + x;
-    buffer[ty * 32 + tx] = f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
-    ptri += ipitch;
-    buffer[ty * 32 + tx + 16] = f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
-    if (ty == 15 && 2 * oheight != iheight) {
-      ptri += ipitch;
-      buffer[tx + 32 * 16] = f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[1];
-    } else if (y * 2 + 3 == iheight && 2 * oheight != iheight) {
-      ptri += ipitch;
-      buffer[tx + 32 * (ty + 1)] =
-          f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
+      buffer[ty * 32 + tx + 16] = f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
+      if (ty == 15 && 2 * oheight != iheight) {
+        ptri += ipitch;
+        buffer[tx + 32 * 16] = f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
+      } else if (y * 2 + 3 == iheight && 2 * oheight != iheight) {
+        ptri += ipitch;
+        buffer[tx + 32 * (ty + 1)] =
+            f0 * ptri[0] + owidth * ptri[1] + f2 * ptri[2];
+      }
     }
   }
   __syncthreads();
-  float *buff = buffer + 32 * ty + tx;
-  if (2 * oheight == iheight)
-    oimd[y * opitch + x] = oheight * (buff[0] + buff[16]) / (iwidth * iheight);
-  else {
-    float f0 = oheight - y;
-    float f2 = 1 + y;
-    oimd[y * opitch + x] = (f0 * buff[0] + oheight * buff[16] + f2 * buff[32]) /
-                           (iwidth * iheight);
+  if (active) {
+    float *buff = buffer + 32 * ty + tx;
+    if (2 * oheight == iheight)
+      oimd[y * opitch + x] = oheight * (buff[0] + buff[16]) / (iwidth * iheight);
+    else {
+      float f0 = oheight - y;
+      float f2 = 1 + y;
+      oimd[y * opitch + x] = (f0 * buff[0] + oheight * buff[16] + f2 * buff[32]) /
+                             (iwidth * iheight);
+    }
   }
 }
 
@@ -466,7 +470,7 @@ double Copy(CudaImage &inimg, CudaImage &outimg) {
   // TimerGPU timer0(0);
   double gpuTime = 0;  // timer0.read();
   safeCall(cudaMemcpy2DAsync(outimg.d_data, sizeof(float) * outimg.pitch,
-                             inimg.d_data, sizeof(float) * outimg.pitch,
+                             inimg.d_data, sizeof(float) * inimg.pitch,
                              sizeof(float) * inimg.width, inimg.height,
                              cudaMemcpyDeviceToDevice));
 #ifdef VERBOSE
@@ -485,31 +489,31 @@ float *AllocBuffers(int width, int height, int num, int omax, int &maxpts,
   int w = width;
   int h = height;
   int p = iAlignUp(w, 128);
-  int size = 0;
+  size_t size = 0;
   for (int i = 0; i < omax; i++) {
     for (int j = 0; j < num; j++) {
       CudaImage &buf = buffers[i * num + j];
       buf.width = w;
       buf.height = h;
       buf.pitch = p;
-      buf.d_data = (float *)((long)size);
-      size += h * p;
+      buf.d_data = (float *)((size_t)size);
+      size += (size_t)h * p;
     }
     w /= 2;
     h /= 2;
     p = iAlignUp(w, 128);
   }
-  int ptsstart = size;
+  size_t ptsstart = size;
   size += sizeof(AkazeKeyPoint) * maxpts / sizeof(float);
-  int ptsbufferstart = size;
+  size_t ptsbufferstart = size;
   size += sizeof(AkazeKeyPoint) * maxpts / sizeof(float);
-  int descstart = size;
+  size_t descstart = size;
   size += sizeof(unsigned char)*maxpts*61/sizeof(float);
-  int descbufferstart = size;
+  size_t descbufferstart = size;
   size += sizeof(float)*3*29*maxpts / sizeof(float);
-  int indicesstart = size;
+  size_t indicesstart = size;
   size += 21*21*sizeof(int)*maxpts/sizeof(float);
-  int imgstart = size;
+  size_t imgstart = size;
   size += sizeof(CudaImage) * (num * omax + sizeof(float) - 1) / sizeof(float);
   float *memory = NULL;
   size_t pitch;
@@ -518,7 +522,7 @@ float *AllocBuffers(int width, int height, int num, int omax, int &maxpts,
                            (size + 4095) / 4096 * sizeof(float)));
   for (int i = 0; i < omax * num; i++) {
     CudaImage &buf = buffers[i];
-    buf.d_data = memory + (long)buf.d_data;
+    buf.d_data = memory + (size_t)buf.d_data;
   }
   pts = (AkazeKeyPoint *)(memory + ptsstart);
   ptsbuffer = (AkazeKeyPoint *)(memory + ptsbufferstart);
@@ -535,7 +539,13 @@ float *AllocBuffers(int width, int height, int num, int omax, int &maxpts,
 }
 
 
-void FreeBuffers(float *buffers) { safeCall(cudaFree(buffers)); }
+void FreeBuffers(float *buffers) {
+  if (copyStream) {
+    cudaStreamDestroy(copyStream);
+    copyStream = 0;
+  }
+  safeCall(cudaFree(buffers));
+}
 
 __device__ unsigned int d_Maxval[1];
 __device__ int d_Histogram[512];
@@ -604,14 +614,12 @@ double ContrastPercentile(CudaImage &img, CudaImage &temp, CudaImage &blur,
   LowPass(img, blur, temp, 1.0f, 5);
 
   float h_Maxval = 0.0f;
-  safeCall(cudaMemcpyToSymbolAsync(d_Maxval, &h_Maxval, sizeof(float)));
+  safeCall(cudaMemcpyToSymbol(d_Maxval, &h_Maxval, sizeof(float)));
   dim3 blocks1(iDivUp(img.width, CONTRAST_W), iDivUp(img.height, CONTRAST_H));
   dim3 threads1(CONTRAST_W + 2, CONTRAST_H + 2);
   MaxContrast << <blocks1, threads1>>>
       (blur.d_data, temp.d_data, blur.width, blur.pitch, blur.height);
-  // checkMsg("MaxContrast() execution failed\n");
-  // safeCall(cudaThreadSynchronize());
-  safeCall(cudaMemcpyFromSymbolAsync(&h_Maxval, d_Maxval, sizeof(float)));
+  safeCall(cudaMemcpyFromSymbol(&h_Maxval, d_Maxval, sizeof(float)));
 
   if (nbins > 512) {
     printf(
@@ -619,17 +627,21 @@ double ContrastPercentile(CudaImage &img, CudaImage &temp, CudaImage &blur,
         "512\n");
     nbins = 512;
   }
+  if (h_Maxval <= 0.0f) {
+    contrast = 0.03f;
+    return 0;
+  }
   int h_Histogram[512];
   memset(h_Histogram, 0, nbins * sizeof(int));
   safeCall(
-      cudaMemcpyToSymbolAsync(d_Histogram, h_Histogram, nbins * sizeof(int)));
+      cudaMemcpyToSymbol(d_Histogram, h_Histogram, nbins * sizeof(int)));
   dim3 blocks2(iDivUp(temp.width, HISTCONT_W),
                iDivUp(temp.height, HISTCONT_H * HISTCONT_R));
   dim3 threads2(HISTCONT_W, HISTCONT_H);
   HistContrast << <blocks2, threads2>>> (temp.d_data, temp.width, temp.pitch,
                                          temp.height, 1.0f / h_Maxval, nbins);
   safeCall(
-      cudaMemcpyFromSymbolAsync(h_Histogram, d_Histogram, nbins * sizeof(int)));
+      cudaMemcpyFromSymbol(h_Histogram, d_Histogram, nbins * sizeof(int)));
 
   int npoints = (temp.width - 2) * (temp.height - 2);
   int nthreshold = (int)(npoints * perc);
@@ -1164,7 +1176,7 @@ __global__ void FilterExtrema_kernel(AkazeKeyPoint *kpts, AkazeKeyPoint *newkpts
           // That the point with lowest memberarrayindex processes it first
           // Here minneighbor[i] is the target and i the neighbor
           int nidx = neighbors[0];
-          minneighbor[nidx] = min(minneighbor[nidx], (int)i);
+          atomicMin(&minneighbor[nidx], (int)i);
         }
       }
     }
@@ -1369,28 +1381,30 @@ CHK
 
     // Find all neighbors
   cudaStreamSynchronize(copyStream);
+
+  if (nump <= 0) {
+    return;
+  }
+
   blocks.x = nump;
   threads.x = FindNeighborsThreads;
   FindNeighbors << <blocks, threads>>> (newpts, kptindices, width);
 CHK
-  //cudaDeviceSynchronize();
-  //safeCall(cudaGetLastError());
-  
+
   // Filter extrema
   blocks.x = 1;
   threads.x = FilterExtremaThreads;
+  size_t bufsz = (size_t)nump * sizeof(int);
   int *buffer1, *buffer2;
-  cudaMalloc((void**)&buffer1, nump*sizeof(int));
-  cudaMalloc((void**)&buffer2, nump*sizeof(int));
   char* buffer3;
-  cudaMalloc((void**)&buffer3, nump);
+  safeCall(cudaMalloc((void**)&buffer1, bufsz));
+  safeCall(cudaMalloc((void**)&buffer2, bufsz));
+  safeCall(cudaMalloc((void**)&buffer3, (size_t)nump));
   FilterExtrema_kernel << <blocks, threads>>> (newpts, pts, kptindices, width,
 					       buffer1, buffer2, buffer3);
   threads.x = 1024;
   sortFiltered_kernel << <blocks, threads>>> (newpts, pts, buffer1);
 CHK
-  //cudaDeviceSynchronize();
-  //safeCall(cudaGetLastError());
   cudaFree(buffer1);
   cudaFree(buffer2);
   cudaFree(buffer3);

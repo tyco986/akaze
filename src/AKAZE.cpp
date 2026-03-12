@@ -44,8 +44,8 @@ void Matcher::bfmatch(AkazeMat &desc_query, AkazeMat &desc_train,
     if (maxnquery < desc_query.rows) {
 	if (descq_d) cudaFree(descq_d);
 	if (dmatches_d) cudaFree(dmatches_d);
-	cudaMallocPitch((void**)&descq_d, &pitch, 64, desc_query.rows);
-	cudaMemset2D(descq_d, pitch, 0, 64, desc_query.rows);
+	cudaMallocPitch((void**)&descq_d, &pitch_q, 64, desc_query.rows);
+	cudaMemset2D(descq_d, pitch_q, 0, 64, desc_query.rows);
 	cudaMalloc((void**)&dmatches_d, desc_query.rows * 2 * sizeof(AkazeMatch));
 	if (dmatches_h) delete [] dmatches_h;
 	dmatches_h = new AkazeMatch[2 * desc_query.rows];
@@ -53,21 +53,19 @@ void Matcher::bfmatch(AkazeMat &desc_query, AkazeMat &desc_train,
     }
     if (maxntrain < desc_train.rows) {
 	if (desct_d) cudaFree(desct_d);
-	cudaMallocPitch((void**)&desct_d, &pitch, 64, desc_train.rows);
-	cudaMemset2DAsync(desct_d, pitch, 0, 64, desc_train.rows);
+	cudaMallocPitch((void**)&desct_d, &pitch_t, 64, desc_train.rows);
+	cudaMemset2DAsync(desct_d, pitch_t, 0, 64, desc_train.rows);
 	maxntrain = desc_train.rows;
     }
     
-    cudaMemcpy2DAsync(descq_d, pitch, desc_query.data, desc_query.cols,
+    cudaMemcpy2DAsync(descq_d, pitch_q, desc_query.data, desc_query.cols,
 		      desc_query.cols, desc_query.rows, cudaMemcpyHostToDevice);
     
-    cudaMemcpy2DAsync(desct_d, pitch, desc_train.data, desc_train.cols,
+    cudaMemcpy2DAsync(desct_d, pitch_t, desc_train.data, desc_train.cols,
 		      desc_train.cols, desc_train.rows, cudaMemcpyHostToDevice);
     
-    dim3 block(desc_query.rows);
-    
     dmatches.clear();
-    MatchDescriptors(desc_query, desc_train, dmatches, pitch,
+    MatchDescriptors(desc_query, desc_train, dmatches, pitch_q,
 		     descq_d, desct_d, dmatches_d, dmatches_h);
     
 }
@@ -82,6 +80,7 @@ AkazeMat Matcher::bfmatch_(AkazeMat desc_query, AkazeMat desc_train) {
     AkazeMat dmatches_mat(dmatches_vec.size(), 8, AKAZE_32FC1);
 
     for (size_t i=0; i<dmatches_vec.size(); ++i) {
+	if (dmatches_vec[i].size() < 2) continue;
 	float* mdata = (float*)&dmatches_mat.data[i*8*sizeof(float)];
 
 	mdata[0] = dmatches_vec[i][0].queryIdx;
@@ -251,7 +250,6 @@ int AKAZE::Create_Nonlinear_Scale_Space(const AkazeMat& img) {
     Flow(Lsmooth, Lflow, options_.diffusivity, options_.kcontrast);
 
     for (int j = 0; j < nsteps_[i - 1]; j++) {
-        float stepsize = tsteps_[i - 1][j] / (1 << 2 * evn.octave);
         NLDStep(Lt, Lflow, Lstep, tsteps_[i - 1][j]);
     }
 

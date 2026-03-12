@@ -84,6 +84,9 @@ struct AKAZETiming {
 struct AKAZEOptions {
 
   AKAZEOptions() {
+    omin = 0;
+    img_width = 0;
+    img_height = 0;
     soffset = 1.6f;
     derivative_factor = 1.5f;
     omax = 4;

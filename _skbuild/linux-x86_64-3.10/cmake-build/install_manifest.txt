@@ -1,0 +1,1 @@
+/root/project/akaze/_skbuild/linux-x86_64-3.10/cmake-install/akaze/./libakaze_pybindings.cpython-310-x86_64-linux-gnu.so

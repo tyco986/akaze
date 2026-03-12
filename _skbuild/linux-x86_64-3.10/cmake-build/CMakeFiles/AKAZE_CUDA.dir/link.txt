@@ -1,0 +1,2 @@
+/usr/bin/ar qc lib/libAKAZE_CUDA.a CMakeFiles/AKAZE_CUDA.dir/src/cudaImage.cu.o CMakeFiles/AKAZE_CUDA.dir/src/cuda_akaze.cu.o
+/usr/bin/ranlib lib/libAKAZE_CUDA.a

@@ -80,6 +80,9 @@ class AkazeAligner:
             opts = AKAZEOptions()
             opts.setWidth(w)
             opts.setHeight(h)
+            opts.omax = self.omax
+            opts.nsublevels = self.nsublevels
+            opts.dthreshold = self.dthreshold
             self._akaze_cache[key] = AKAZE(opts)
         return self._akaze_cache[key]
 
