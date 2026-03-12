@@ -1,1 +1,1 @@
-from .akaze import AkazeAligner
+from .akaze_aligner import AkazeAligner

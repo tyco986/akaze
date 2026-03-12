@@ -188,7 +188,7 @@ def main():
         print(f"    [{i}]:\n{warp_matrix[i]}")
 
     # --- Per-stage timing breakdown (single pair, averaged over batch) ---
-    from akaze.akaze import _to_gray_float32
+    from akaze.akaze_aligner import _to_gray_float32
     t_all = _to_gray_float32(template_batch)
     i_all = _to_gray_float32(image_batch)
     matcher = Matcher()

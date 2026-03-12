@@ -1,11 +1,11 @@
 """
-AKAZE CUDA aligner: A-KAZE features + BFMatcher + findHomography(RANSAC).
-Feature-based homography alignment using GPU-accelerated A-KAZE.
+AKAZE aligner: A-KAZE features + BFMatcher + findHomography(RANSAC).
+Supports GPU (CUDA) and CPU (OpenCV) backends via ``device`` parameter.
 """
 
 import cv2
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 try:
     import torch
@@ -13,7 +13,11 @@ try:
 except ImportError:
     HAS_TORCH = False
 
-from .libakaze_pybindings import AKAZE, AKAZEOptions, Matcher
+try:
+    from .libakaze_pybindings import AKAZE, AKAZEOptions, Matcher
+    HAS_CUDA_BACKEND = True
+except ImportError:
+    HAS_CUDA_BACKEND = False
 
 # NNDR threshold for match filtering (same as C++ akaze_match)
 DRATIO = 0.80
@@ -49,8 +53,10 @@ def _to_gray_float32(x) -> np.ndarray:
 
 class AkazeAligner:
     """
-    AKAZE CUDA: GPU-accelerated A-KAZE features + BFMatcher + findHomography(RANSAC).
-    Feature-based homography alignment. Uses libakaze_pybindings (AKAZE, Matcher).
+    AKAZE feature-based homography alignment.
+
+    * ``device=None`` or ``device=0,1,...`` — GPU backend (CUDA, requires libakaze_pybindings)
+    * ``device="cpu"`` — CPU backend (OpenCV ``cv2.AKAZE``)
     """
 
     def __init__(
@@ -62,7 +68,7 @@ class AkazeAligner:
         ransac_max_iters: int = 2000,
         ransac_confidence: float = 0.995,
         nndr: float = DRATIO,
-        device: Optional[int] = None,
+        device: Union[str, int] = 0,
         ransac_seed: Optional[int] = 42,
     ):
         self.omax = omax
@@ -72,12 +78,35 @@ class AkazeAligner:
         self.ransac_max_iters = ransac_max_iters
         self.ransac_confidence = ransac_confidence
         self.nndr = nndr
-        self.device = device
         self.ransac_seed = ransac_seed
-        self._matcher = Matcher()
-        self._akaze_cache = {}  # (w, h) -> AKAZE instance
+        self._use_cpu = isinstance(device, str) and device.lower() == "cpu"
 
-    def _get_or_create_akaze(self, w: int, h: int) -> AKAZE:
+        if self._use_cpu:
+            self.device = "cpu"
+            self._cv_akaze = cv2.AKAZE_create(
+                descriptor_type=cv2.AKAZE_DESCRIPTOR_MLDB,
+                descriptor_size=0,
+                descriptor_channels=3,
+                threshold=dthreshold,
+                nOctaves=omax,
+                nOctaveLayers=nsublevels,
+                diffusivity=cv2.KAZE_DIFF_PM_G2,
+            )
+            self._cv_matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
+        else:
+            if not HAS_CUDA_BACKEND:
+                raise RuntimeError(
+                    "CUDA backend (libakaze_pybindings) not available. "
+                    "Use device='cpu' for the OpenCV backend."
+                )
+            self.device = device
+            self._matcher = Matcher()
+            self._akaze_cache = {}  # (w, h) -> AKAZE instance
+
+    # ------------------------------------------------------------------
+    # GPU (CUDA) backend
+    # ------------------------------------------------------------------
+    def _get_or_create_akaze(self, w: int, h: int):
         key = (w, h)
         if key not in self._akaze_cache:
             opts = AKAZEOptions()
@@ -89,17 +118,15 @@ class AkazeAligner:
             self._akaze_cache[key] = AKAZE(opts)
         return self._akaze_cache[key]
 
-    def _compute_features(self, img: np.ndarray):
-        """Run AKAZE scale-space + descriptor extraction on a single 2D image."""
+    def _compute_features_gpu(self, img: np.ndarray):
         h, w = img.shape
         akaze = self._get_or_create_akaze(w, h)
         akaze.Create_Nonlinear_Scale_Space(img)
         return akaze.Compute_Descriptors()
 
-    def _match_and_homography(
+    def _match_and_homography_gpu(
         self, desc_t, kpts_t, desc_i, kpts_i
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """BFMatch + NNDR filter + RANSAC homography."""
         _I = np.eye(3, dtype=np.float32)
         _Z = np.zeros(2, dtype=np.float32)
 
@@ -136,12 +163,53 @@ class AkazeAligner:
         H32 = H.astype(np.float32)
         return H32, H32[:2, 2].copy()
 
+    # ------------------------------------------------------------------
+    # CPU (OpenCV) backend
+    # ------------------------------------------------------------------
+    def _compute_features_cpu(self, img: np.ndarray):
+        img_u8 = (img * 255).clip(0, 255).astype(np.uint8)
+        kpts, desc = self._cv_akaze.detectAndCompute(img_u8, None)
+        if kpts is None or desc is None or len(kpts) == 0:
+            return None, None
+        pts = np.array([[kp.pt[0], kp.pt[1]] for kp in kpts], dtype=np.float32)
+        return desc, pts
+
+    def _match_and_homography_cpu(
+        self, desc_t, pts_t, desc_i, pts_i
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        _I = np.eye(3, dtype=np.float32)
+        _Z = np.zeros(2, dtype=np.float32)
+
+        if desc_t is None or desc_i is None or pts_t is None or pts_i is None:
+            return _I, _Z
+        if len(pts_t) < 4 or len(pts_i) < 4:
+            return _I, _Z
+
+        matches = self._cv_matcher.knnMatch(desc_t, desc_i, k=2)
+        good = [
+            m for m, n in matches
+            if n.distance > 1e-10 and m.distance < self.nndr * n.distance
+        ]
+        if len(good) < 4:
+            return _I, _Z
+
+        pts0 = pts_t[[m.queryIdx for m in good]]
+        pts1 = pts_i[[m.trainIdx for m in good]]
+
+        H, status = self._find_homography_ransac(pts0, pts1)
+        if H is None:
+            return _I, _Z
+        H32 = H.astype(np.float32)
+        return H32, H32[:2, 2].copy()
+
+    # ------------------------------------------------------------------
+    # Shared
+    # ------------------------------------------------------------------
     def _find_homography_ransac(
         self,
         pts0: np.ndarray,
         pts1: np.ndarray,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """RANSAC homography. pts0=template, pts1=image."""
         if self.ransac_seed is not None:
             cv2.setRNGSeed(self.ransac_seed)
         H, status = cv2.findHomography(
@@ -168,12 +236,20 @@ class AkazeAligner:
         warps = []
         motions = []
 
-        for b in range(B):
-            desc_t, kpts_t = self._compute_features(t[b])
-            desc_i, kpts_i = self._compute_features(i[b])
-            H, mot = self._match_and_homography(desc_t, kpts_t, desc_i, kpts_i)
-            warps.append(H)
-            motions.append(mot)
+        if self._use_cpu:
+            for b in range(B):
+                desc_t, pts_t = self._compute_features_cpu(t[b])
+                desc_i, pts_i = self._compute_features_cpu(i[b])
+                H, mot = self._match_and_homography_cpu(desc_t, pts_t, desc_i, pts_i)
+                warps.append(H)
+                motions.append(mot)
+        else:
+            for b in range(B):
+                desc_t, kpts_t = self._compute_features_gpu(t[b])
+                desc_i, kpts_i = self._compute_features_gpu(i[b])
+                H, mot = self._match_and_homography_gpu(desc_t, kpts_t, desc_i, kpts_i)
+                warps.append(H)
+                motions.append(mot)
 
         warp = np.stack(warps, axis=0)
         motion = np.stack(motions, axis=0)
