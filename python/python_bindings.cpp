@@ -24,13 +24,18 @@ PYBIND11_MODULE(libakaze_pybindings, m) {
         .def("Create_Nonlinear_Scale_Space", [](AKAZE& self,
                 py::array_t<float, py::array::c_style | py::array::forcecast> img) {
             AkazeMat mat = numpy_to_mat_view(img);
-            return self.Create_Nonlinear_Scale_Space(mat);
+            int rc;
+            { py::gil_scoped_release release; rc = self.Create_Nonlinear_Scale_Space(mat); }
+            return rc;
         })
         .def("Feature_Detection", [](AKAZE& self) {
-            return mat_to_numpy(self.Feature_Detection_());
+            AkazeMat result;
+            { py::gil_scoped_release release; result = self.Feature_Detection_(); }
+            return mat_to_numpy(result);
         })
         .def("Compute_Descriptors", [](AKAZE& self) {
-            auto p = self.Compute_Descriptors_Seq();
+            std::pair<AkazeMat, AkazeMat> p;
+            { py::gil_scoped_release release; p = self.Compute_Descriptors_Seq(); }
             return py::make_tuple(mat_to_numpy(p.first), mat_to_numpy(p.second));
         });
 
@@ -47,7 +52,8 @@ PYBIND11_MODULE(libakaze_pybindings, m) {
                         AKAZE_8UC1, q.ptr);
             AkazeMat mt(static_cast<int>(t.shape[0]), static_cast<int>(t.shape[1]),
                         AKAZE_8UC1, t.ptr);
-            AkazeMat result = self.bfmatch_(mq, mt);
+            AkazeMat result;
+            { py::gil_scoped_release release; result = self.bfmatch_(mq, mt); }
             return mat_to_numpy(result);
         });
 }

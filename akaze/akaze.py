@@ -3,6 +3,7 @@ AKAZE CUDA aligner: A-KAZE features + BFMatcher + findHomography(RANSAC).
 Feature-based homography alignment using GPU-accelerated A-KAZE.
 """
 
+import cv2
 import numpy as np
 from typing import Dict, Optional, Tuple
 
@@ -36,6 +37,8 @@ def _to_gray_float32(x) -> np.ndarray:
             arr = arr[0]
     if arr.ndim == 2:
         arr = arr[np.newaxis]
+    if arr.size == 0:
+        return arr.astype(np.float32)
     if arr.dtype in (np.float32, np.float64):
         if arr.max() > 1.0:
             arr = (arr / 255.0).clip(0, 1)
@@ -130,7 +133,8 @@ class AkazeAligner:
         H, status = self._find_homography_ransac(pts0, pts1)
         if H is None:
             return _I, _Z
-        return H.astype(np.float32), H[:2, 2]
+        H32 = H.astype(np.float32)
+        return H32, H32[:2, 2].copy()
 
     def _find_homography_ransac(
         self,
@@ -138,7 +142,6 @@ class AkazeAligner:
         pts1: np.ndarray,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """RANSAC homography. pts0=template, pts1=image."""
-        import cv2
         if self.ransac_seed is not None:
             cv2.setRNGSeed(self.ransac_seed)
         H, status = cv2.findHomography(
