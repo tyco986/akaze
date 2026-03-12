@@ -563,15 +563,17 @@ __global__ void MaxContrast(float *imgd, float *cond, int width, int pitch,
   __shared__ unsigned int maxval[32];
   int tx = threadIdx.x;
   int ty = threadIdx.y;
-  if (tx < 32 && !ty) maxval[tx] = 0.0f;
+  if (tx < 32 && !ty) maxval[tx] = 0;
   __syncthreads();
   int x = blockIdx.x * CONTRAST_W + tx;
   int y = blockIdx.y * CONTRAST_H + ty;
-  if (x >= width || y >= height) return;
-  float *b = buffer + ty * WID + tx;
-  b[0] = imgd[y * pitch + x];
+  bool active = (x < width && y < height);
+  if (active) {
+    buffer[ty * WID + tx] = imgd[y * pitch + x];
+  }
   __syncthreads();
-  if (tx < CONTRAST_W && ty < CONTRAST_H && x < width - 2 && y < height - 2) {
+  if (active && tx < CONTRAST_W && ty < CONTRAST_H && x < width - 2 && y < height - 2) {
+    float *b = buffer + ty * WID + tx;
     float dx = 3.0f * (b[0] - b[2] + b[2 * WID] - b[2 * WID + 2]) +
                10.0f * (b[WID] - b[WID + 2]);
     float dy = 3.0f * (b[0] + b[2] - b[2 * WID] - b[2 * WID + 2]) +
@@ -2125,9 +2127,13 @@ void InitCompareIndices() {
 __global__ void FindOrientation(AkazeKeyPoint *d_pts, CudaImage *d_imgs) {
   __shared__ float resx[42], resy[42];
   __shared__ float re8x[42], re8y[42];
+  __shared__ int   s_bin[ORIENT_S];
+  __shared__ float s_dx[ORIENT_S];
+  __shared__ float s_dy[ORIENT_S];
   int p = blockIdx.x;
   int tx = threadIdx.x;
   if (tx < 42) resx[tx] = resy[tx] = 0.0f;
+  s_bin[tx] = -1;
   __syncthreads();
   int lev = d_pts[p].class_id;
   float *dxd = d_imgs[4 * lev + 2].d_data;
@@ -2147,8 +2153,18 @@ __global__ void FindOrientation(AkazeKeyPoint *d_pts, CudaImage *d_imgs) {
     float dy = gweight * dyd[pos];
     float angle = atan2(dy, dx);
     int a = max(min((int)(angle * (21 / M_PI)) + 21, 41), 0);
-    atomicAdd(resx + a, dx);
-    atomicAdd(resy + a, dy);
+    s_bin[tx] = a;
+    s_dx[tx] = dx;
+    s_dy[tx] = dy;
+  }
+  __syncthreads();
+  if (tx == 0) {
+    for (int k = 0; k < ORIENT_S; k++) {
+      if (s_bin[k] >= 0) {
+        resx[s_bin[k]] += s_dx[k];
+        resy[s_bin[k]] += s_dy[k];
+      }
+    }
   }
   __syncthreads();
   if (tx < 42) {

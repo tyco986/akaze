@@ -60,7 +60,7 @@ class AkazeAligner:
         ransac_confidence: float = 0.995,
         nndr: float = DRATIO,
         device: Optional[int] = None,
-        ransac_seed: Optional[int] = None,
+        ransac_seed: Optional[int] = 42,
     ):
         self.omax = omax
         self.nsublevels = nsublevels
@@ -86,45 +86,41 @@ class AkazeAligner:
             self._akaze_cache[key] = AKAZE(opts)
         return self._akaze_cache[key]
 
-    def _find_transform_one(
-        self, template: np.ndarray, image: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Single pair. Returns (H 3x3, motion 2,)."""
-        h, w = template.shape
+    def _compute_features(self, img: np.ndarray):
+        """Run AKAZE scale-space + descriptor extraction on a single 2D image."""
+        h, w = img.shape
         akaze = self._get_or_create_akaze(w, h)
-        akaze.Create_Nonlinear_Scale_Space(template)
-        desc_t, kpts_t = akaze.Compute_Descriptors()
+        akaze.Create_Nonlinear_Scale_Space(img)
+        return akaze.Compute_Descriptors()
 
-        h2, w2 = image.shape
-        akaze = self._get_or_create_akaze(w2, h2)
-        akaze.Create_Nonlinear_Scale_Space(image)
-        desc_i, kpts_i = akaze.Compute_Descriptors()
+    def _match_and_homography(
+        self, desc_t, kpts_t, desc_i, kpts_i
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """BFMatch + NNDR filter + RANSAC homography."""
+        _I = np.eye(3, dtype=np.float32)
+        _Z = np.zeros(2, dtype=np.float32)
 
         if desc_t is None or desc_i is None or kpts_t is None or kpts_i is None:
-            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
-        n_t, n_i = kpts_t.shape[0], kpts_i.shape[0]
-        if n_t < 4 or n_i < 4:
-            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
+            return _I, _Z
+        if kpts_t.shape[0] < 4 or kpts_i.shape[0] < 4:
+            return _I, _Z
 
-        # kpts: (N, 7) - columns [x, y, size, angle, response, octave, class_id]
         pts_t = kpts_t[:, :2].astype(np.float32)
         pts_i = kpts_i[:, :2].astype(np.float32)
 
-        # BFMatch template -> image
         dmatches = self._matcher.BFMatch(desc_t, desc_i)
         if dmatches is None or dmatches.size == 0:
-            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
+            return _I, _Z
 
         dmatches = np.asarray(dmatches)
         if dmatches.ndim == 1:
             dmatches = dmatches.reshape(-1, 8)
-        # Each row: [queryIdx, trainIdx, 0, dist0, queryIdx1, trainIdx1, 0, dist1]
         dist0 = dmatches[:, 3]
         dist1 = dmatches[:, 7]
         mask = (dist1 > 1e-10) & (dist0 < self.nndr * dist1)
         valid = np.where(mask)[0]
         if len(valid) < 4:
-            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
+            return _I, _Z
 
         qidx = dmatches[valid, 0].astype(np.int32)
         tidx = dmatches[valid, 1].astype(np.int32)
@@ -133,7 +129,7 @@ class AkazeAligner:
 
         H, status = self._find_homography_ransac(pts0, pts1)
         if H is None:
-            return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)
+            return _I, _Z
         return H.astype(np.float32), H[:2, 2]
 
     def _find_homography_ransac(
@@ -143,6 +139,8 @@ class AkazeAligner:
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """RANSAC homography. pts0=template, pts1=image."""
         import cv2
+        if self.ransac_seed is not None:
+            cv2.setRNGSeed(self.ransac_seed)
         H, status = cv2.findHomography(
             pts0, pts1,
             cv2.RANSAC,
@@ -166,8 +164,11 @@ class AkazeAligner:
         B = t.shape[0]
         warps = []
         motions = []
+
         for b in range(B):
-            H, mot = self._find_transform_one(t[b], i[b])
+            desc_t, kpts_t = self._compute_features(t[b])
+            desc_i, kpts_i = self._compute_features(i[b])
+            H, mot = self._match_and_homography(desc_t, kpts_t, desc_i, kpts_i)
             warps.append(H)
             motions.append(mot)
 

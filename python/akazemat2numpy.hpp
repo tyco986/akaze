@@ -10,15 +10,13 @@
 
 namespace py = pybind11;
 
-inline AkazeMat numpy_to_mat(py::array_t<float> arr) {
+inline AkazeMat numpy_to_mat_view(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
     py::buffer_info buf = arr.request();
     if (buf.ndim != 2)
         throw std::runtime_error("Expected 2D float array (height, width)");
     int rows = static_cast<int>(buf.shape[0]);
     int cols = static_cast<int>(buf.shape[1]);
-    AkazeMat m(rows, cols, AKAZE_32FC1);
-    std::memcpy(m.data, buf.ptr, static_cast<size_t>(rows) * cols * sizeof(float));
-    return m;
+    return AkazeMat(rows, cols, AKAZE_32FC1, buf.ptr);
 }
 
 inline py::array_t<float> mat_to_numpy_f32(const AkazeMat& m) {
