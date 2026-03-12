@@ -15,8 +15,6 @@ PYBIND11_MODULE(libakaze_pybindings, m) {
         .def(py::init<>())
         .def("setWidth", &AKAZEOptions::setWidth)
         .def("setHeight", &AKAZEOptions::setHeight)
-        .def_readwrite("omax", &AKAZEOptions::omax)
-        .def_readwrite("nsublevels", &AKAZEOptions::nsublevels)
         .def_readwrite("dthreshold", &AKAZEOptions::dthreshold);
 
     py::class_<AKAZE>(m, "AKAZE")
