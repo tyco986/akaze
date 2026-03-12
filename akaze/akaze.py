@@ -72,27 +72,30 @@ class AkazeAligner:
         self.device = device
         self.ransac_seed = ransac_seed
         self._matcher = Matcher()
+        self._akaze_cache = {}  # (w, h) -> AKAZE instance
+
+    def _get_or_create_akaze(self, w: int, h: int) -> AKAZE:
+        key = (w, h)
+        if key not in self._akaze_cache:
+            opts = AKAZEOptions()
+            opts.setWidth(w)
+            opts.setHeight(h)
+            self._akaze_cache[key] = AKAZE(opts)
+        return self._akaze_cache[key]
 
     def _find_transform_one(
         self, template: np.ndarray, image: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Single pair. Returns (H 3x3, motion 2,)."""
         h, w = template.shape
-        options_t = AKAZEOptions()
-        options_t.setWidth(w)
-        options_t.setHeight(h)
-        evolution_t = AKAZE(options_t)
+        akaze = self._get_or_create_akaze(w, h)
+        akaze.Create_Nonlinear_Scale_Space(template)
+        desc_t, kpts_t = akaze.Compute_Descriptors()
 
         h2, w2 = image.shape
-        options_i = AKAZEOptions()
-        options_i.setWidth(w2)
-        options_i.setHeight(h2)
-        evolution_i = AKAZE(options_i)
-
-        evolution_t.Create_Nonlinear_Scale_Space(template)
-        desc_t, kpts_t = evolution_t.Compute_Descriptors()
-        evolution_i.Create_Nonlinear_Scale_Space(image)
-        desc_i, kpts_i = evolution_i.Compute_Descriptors()
+        akaze = self._get_or_create_akaze(w2, h2)
+        akaze.Create_Nonlinear_Scale_Space(image)
+        desc_i, kpts_i = akaze.Compute_Descriptors()
 
         if desc_t is None or desc_i is None or kpts_t is None or kpts_i is None:
             return np.eye(3, dtype=np.float32), np.zeros(2, dtype=np.float32)

@@ -52,7 +52,7 @@ void Matcher::bfmatch(AkazeMat &desc_query, AkazeMat &desc_train,
 	maxnquery = desc_query.rows;
     }
     if (maxntrain < desc_train.rows) {
-	if (desct_d) cudaFree(descq_d);
+	if (desct_d) cudaFree(desct_d);
 	cudaMallocPitch((void**)&desct_d, &pitch, 64, desc_train.rows);
 	cudaMemset2DAsync(desct_d, pitch, 0, 64, desc_train.rows);
 	maxntrain = desc_train.rows;
@@ -66,19 +66,9 @@ void Matcher::bfmatch(AkazeMat &desc_query, AkazeMat &desc_train,
     
     dim3 block(desc_query.rows);
     
+    dmatches.clear();
     MatchDescriptors(desc_query, desc_train, dmatches, pitch,
 		     descq_d, desct_d, dmatches_d, dmatches_h);
-    
-    cudaMemcpy(dmatches_h, dmatches_d, desc_query.rows * 2 * sizeof(AkazeMatch),
-	       cudaMemcpyDeviceToHost);
-    
-    dmatches.clear();
-    for (int i = 0; i < desc_query.rows; ++i) {
-	std::vector<AkazeMatch> tdmatch;
-	tdmatch.push_back(dmatches_h[2 * i]);
-	tdmatch.push_back(dmatches_h[2 * i + 1]);
-	dmatches.push_back(tdmatch);
-    }
     
 }
 
